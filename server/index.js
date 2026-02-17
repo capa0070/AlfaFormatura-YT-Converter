@@ -1,83 +1,226 @@
 const express = require('express');
 const cors = require('cors');
-const ytdl = require('@distube/ytdl-core');
+const { spawn } = require('child_process');
+const path = require('path');
+const fs = require('fs');
 const contentDisposition = require('content-disposition');
-const ffmpeg = require('fluent-ffmpeg');
 const ffmpegPath = require('ffmpeg-static');
+const ytpl = require('ytpl');
+
 const app = express();
 
 app.use(cors());
 app.use(express.json());
 
-ffmpeg.setFfmpegPath(ffmpegPath);
+// Aumentar o timeout se necessário (embora streaming responda rápido)
+// app.timeout = 300000; 
 
-const agent = ytdl.createAgent();
+process.on('uncaughtException', (err) => {
+    console.error('UNCAUGHT EXCEPTION:', err);
+});
+
+process.on('unhandledRejection', (reason, p) => {
+    console.error('UNHANDLED REJECTION:', reason);
+});
+
+// Caminho do yt-dlp executável (no Windows deve ser .exe)
+const ytDlpPath = path.join(__dirname, 'yt-dlp.exe');
+
+// Função auxiliar para formatar bytes
+const formatBytes = (bytes, decimals = 2) => {
+    if (!+bytes) return '0 Bytes';
+    const k = 1024;
+    const dm = decimals < 0 ? 0 : decimals;
+    const sizes = ['Bytes', 'KB', 'MB', 'GB'];
+    const i = Math.floor(Math.log(bytes) / Math.log(k));
+    return `${parseFloat((bytes / Math.pow(k, i)).toFixed(dm))} ${sizes[i]}`;
+};
+
+// Wrapper para executar yt-dlp e obter JSON com informações do vídeo
+const getYtInfo = (url) => {
+    return new Promise((resolve, reject) => {
+        // --dump-single-json é melhor para garantir um único JSON
+        const args = ['--dump-single-json', '--no-warnings', '--no-playlist', url];
+
+        console.log(`Getting info for: ${url}`);
+        const child = spawn(ytDlpPath, args);
+
+        let stdout = '';
+        let stderr = '';
+
+        child.stdout.on('data', (data) => {
+            stdout += data.toString();
+        });
+
+        child.stderr.on('data', (data) => {
+            stderr += data.toString();
+        });
+
+        child.on('close', (code) => {
+            if (code !== 0) {
+                console.error(`yt-dlp info error: ${stderr}`);
+                return reject(new Error(stderr || 'Erro ao obter informações do vídeo'));
+            }
+            try {
+                const info = JSON.parse(stdout);
+                resolve(info);
+            } catch (e) {
+                console.error('JSON Parse error:', e);
+                reject(e);
+            }
+        });
+    });
+};
 
 app.get('/info', async (req, res) => {
     try {
-        const info = await ytdl.getInfo(req.query.url, { agent });
-        res.json({ title: info.videoDetails.title, author: info.videoDetails.author.name, thumbnail: info.videoDetails.thumbnails[0].url });
+        const url = req.query.url;
+        if (!url) return res.status(400).send('URL é obrigatória');
+
+        const info = await getYtInfo(url);
+
+        // Tentar estimar tamanho do arquivo
+        // yt-dlp geralmente retorna 'filesize_approx' no obj raiz se for stream, ou 'filesize'
+        let size = info.filesize || info.filesize_approx || 0;
+
+        res.json({
+            title: info.title,
+            author: info.uploader || info.channel || 'Desconhecido',
+            thumbnail: info.thumbnail,
+            resolution: info.resolution || (info.width && info.height ? `${info.width}x${info.height}` : 'HD'),
+            size: formatBytes(size)
+        });
+
     } catch (e) {
+        console.error('Info Error:', e);
+        res.status(500).send(e.message);
+    }
+});
+
+app.get('/playlist', async (req, res) => {
+    try {
+        const url = req.query.url;
+        console.log(`[Playlist] Fetching: ${url}`);
+
+        // Usando ytpl que já estava instalado e funcionando para playlists rápidas
+        // Se precisar mudar para yt-dlp no futuro, pode ser feito.
+        const playlist = await ytpl(url, { limit: Infinity });
+
+        const videos = playlist.items.map(item => ({
+            title: item.title,
+            url: item.shortUrl,
+            thumbnail: item.bestThumbnail.url,
+            author: item.author.name
+        }));
+
+        console.log(`[Playlist] Found ${videos.length} videos.`);
+        res.json({
+            title: playlist.title,
+            total: videos.length,
+            videos: videos
+        });
+
+    } catch (e) {
+        console.error('Playlist Error:', e);
         res.status(500).send(e.message);
     }
 });
 
 app.get('/download', async (req, res) => {
-    const { url, format } = req.query;
-    console.log(`[Fluxo Seguro] Format: ${format}, URL: ${url}`);
+    const { url, format, quality } = req.query;
+    console.log(`[Download] Format: ${format}, Quality: ${quality}, URL: ${url}`);
+
+    if (!url) return res.status(400).send('URL missing');
+
+    let ytDlpProcess = null;
 
     try {
-        const info = await ytdl.getInfo(url, { agent });
-        const cleanTitle = info.videoDetails.title.replace(/[^\x20-\x7E]/g, "").replace(/["']/g, "");
+        // Primeiro, obter informações para limpar o título e configurar headers
+        const info = await getYtInfo(url);
+        const cleanTitle = (info.title || 'video').replace(/[^\x20-\x7E]/g, "").replace(/["'\/\\:*?"<>|]/g, "_");
+
+        const args = [url, '--ffmpeg-location', ffmpegPath, '--no-warnings', '--no-playlist'];
 
         if (format === 'mp3') {
             res.setHeader('Content-Type', 'audio/mpeg');
             res.setHeader('Content-Disposition', contentDisposition(`${cleanTitle}.mp3`));
 
-            // ESTRATÉGIA ANTI-BLOQUEIO:
-            // 1. Usar itag 18 (MP4 360p). O YouTube raramente bloqueia esse formato pois é o padrão de compatibilidade.
-            // 2. Extrair o áudio desse vídeo usando FFmpeg e converter para MP3.
-
-            const videoStream = ytdl(url, {
-                quality: '18', // Força formato 18 (vídeo com áudio)
-                agent
-            });
-
-            const command = ffmpeg(videoStream)
-                .inputFormat('mp4')
-                .toFormat('mp3')
-                .audioBitrate(192)
-                .on('start', () => console.log('FFmpeg iniciado (192kbps)...'))
-                .on('error', (err) => {
-                    console.error('Erro FFmpeg:', err);
-                    if (!res.headersSent) res.status(500).end();
-                })
-                .on('end', () => console.log('Conversão finalizada!'));
-
-            command.pipe(res, { end: true });
+            // Extrair áudio, converter para mp3, pipe para stdout
+            args.push(
+                '-x',
+                '--audio-format', 'mp3',
+                '--audio-quality', '0',
+                '-o', '-'
+            );
 
         } else {
-            // Para MP4 também usamos itag 18 se possível, ou highest caso o usuário queira qualidade
+            // MP4 - COMPATIBILIDADE TOTAL (H.264 + AAC)
             res.setHeader('Content-Type', 'video/mp4');
             res.setHeader('Content-Disposition', contentDisposition(`${cleanTitle}.mp4`));
 
-            ytdl(url, {
-                filter: (f) => f.container === 'mp4' && f.hasAudio && f.hasVideo,
-                quality: 'highest', // Tenta a melhor qualidade para vídeo
-                agent
-            })
-                .pipe(res)
-                .on('error', (err) => {
-                    console.error('Erro MP4:', err);
-                    if (!res.headersSent) res.status(500).end();
-                });
+            args.push('--merge-output-format', 'mp4');
+
+            let heightLimit = 360;
+            // 'max' agora também respeita o limite de 1080p pois o usuário pediu remoção de 4k
+            if (quality === 'max' || quality === '1080p') heightLimit = 1080;
+            else if (quality === '720p') heightLimit = 720;
+
+            // Format Selector Strategy para Compatibilidade de Player:
+            // 1. Prioriza Vídeo H.264 (avc1) + Áudio AAC (m4a) até o a altura limite
+            // 2. Se não tiver H.264 específico, pega o melhor MP4 até o limite
+            // 3. Fallback genérico
+
+            // Nota: bv* é bestvideo, ba é bestaudio. 
+            // [vcodec^=avc1] força H.264 que roda em tudo.
+
+            const formatSelector = [
+                `bv*[height<=${heightLimit}][vcodec^=avc1]+ba[ext=m4a]`,
+                `bv*[height<=${heightLimit}][ext=mp4]+ba[ext=m4a]`,
+                `b[height<=${heightLimit}]`
+            ].join('/');
+
+            args.push('-f', formatSelector);
+            args.push('-o', '-');
         }
 
+        console.log(`Spawn yt-dlp: ${args.join(' ')}`);
+
+        ytDlpProcess = spawn(ytDlpPath, args);
+
+        // Pipe stdout (video data) to res
+        ytDlpProcess.stdout.pipe(res);
+
+        // Log stderr for debugging
+        ytDlpProcess.stderr.on('data', (data) => {
+            // yt-dlp escreve progresso no stderr também
+            const msg = data.toString();
+            if (!msg.includes('[download]')) {
+                console.error(`[yt-dlp stderr]: ${msg}`);
+            }
+        });
+
+        ytDlpProcess.on('close', (code) => {
+            if (code !== 0) {
+                console.error(`yt-dlp process exited with code ${code}`);
+                // Se ainda não enviou headers (pouco provável se for stream), envia erro
+                if (!res.headersSent) res.status(500).end();
+            } else {
+                console.log('Download finished successfully.');
+            }
+        });
+
+        // Se o cliente desconectar, matar o processo
+        req.on('close', () => {
+            console.log('Client disconnected, killing yt-dlp process...');
+            if (ytDlpProcess) ytDlpProcess.kill();
+        });
+
     } catch (error) {
-        console.error('Erro Geral:', error);
-        if (!res.headersSent) res.status(500).send('Erro interno');
+        console.error('Download Error:', error);
+        if (ytDlpProcess) ytDlpProcess.kill();
+        if (!res.headersSent) res.status(500).send('Internal Server Error');
     }
 });
 
 const PORT = 4001;
-app.listen(PORT, () => console.log(`Servidor Blindado ON : ${PORT}`));
+app.listen(PORT, () => console.log(`Servidor de Qualidade (yt-dlp) ON : ${PORT}`));
