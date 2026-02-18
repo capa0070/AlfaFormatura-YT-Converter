@@ -112,7 +112,10 @@ function App() {
       // Se for vídeo de playlist, o fetchInfo pega o tamanho real/resolução aqui
       const response = await fetch(`${API_URL}/info?url=${encodeURIComponent(url)}`);
 
-      if (!response.ok) throw new Error('Falha ao obter info');
+      if (!response.ok) {
+        const errorText = await response.text();
+        throw new Error(errorText || 'Falha ao obter info');
+      }
 
       const data = await response.json();
       updateItem(id, {
@@ -123,6 +126,7 @@ function App() {
     } catch (e) {
       console.error(e);
       updateItem(id, { status: 'error', progress: 0 });
+      alert(`Erro no vídeo: ${e.message}`);
     }
   };
 
@@ -135,16 +139,8 @@ function App() {
     const qualityParam = (item.quality || '192kbps').replace('kbps', '');
     const downloadUrl = `${API_URL}/download?url=${encodeURIComponent(item.url)}&format=${item.format}&quality=${qualityParam}`;
 
-    // Cria um iframe invisível para forçar o download sem abrir nova aba visível
-    const iframe = document.createElement('iframe');
-    iframe.style.display = 'none';
-    iframe.src = downloadUrl;
-    document.body.appendChild(iframe);
-
-    // Remove o iframe após um tempo seguro (o download já deve ter iniciado)
-    setTimeout(() => {
-      document.body.removeChild(iframe);
-    }, 60000); // 60 segundos para garantir que a requisição foi feita
+    // Abre em nova aba para o usuário ver se der erro no servidor (500/404)
+    window.open(downloadUrl, '_blank');
   };
 
   const downloadAll = () => {
