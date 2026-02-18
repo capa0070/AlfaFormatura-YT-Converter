@@ -19,8 +19,8 @@ function App() {
   const [defaultFormat, setDefaultFormat] = useState('mp3');
   const [defaultQuality, setDefaultQuality] = useState('320kbps');
 
-  // URL da API: Usa variável de ambiente em produção ou fallback para localhost
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4001';
+  // No Vercel, o backend e frontend rodam juntos. Usamos /api para acessar as funções.
+  const API_URL = '/api';
 
   // Função para processar a entrada de texto e identificar Links e Playlists
   const handleStartProcess = async () => {
