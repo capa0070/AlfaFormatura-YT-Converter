@@ -194,8 +194,8 @@ function App() {
       <main className="container main-content">
         <section className="converter-section">
           <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="hero-text">
-            <h1>O Conversor de YouTube para <span>Grandes Eventos</span></h1>
-            <p>Cole os links e baixe tudo de uma vez.</p>
+            <h1>Equipe de editores da Alfa: <span>usem com moderação</span></h1>
+            <p>Aqui é pra agilizar, não pra virar vício. O Zé é embaçado e o conversor resolve rapidinho: cola os links e baixa de uma vez.</p>
           </motion.div>
 
           <div className="bulk-input-container glass">
