@@ -27,6 +27,8 @@ def info():
             'quiet': True,
             'no_warnings': True,
             'skip_download': True,
+            'cache_dir': '/tmp', # Fix for Vercel Read-Only Filesystem
+            'noplaylist': True,
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -54,6 +56,7 @@ def playlist():
             'no_warnings': True,
             'extract_flat': True,
             'dump_single_json': True,
+            'cache_dir': '/tmp', # Fix for Vercel Read-Only Filesystem
         }
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
@@ -61,7 +64,6 @@ def playlist():
             entries = info.get('entries', [])
             videos = []
             for entry in entries:
-                # Filtrar apenas vídeos (alguns entries podem ser null ou privados)
                 if not entry: continue
                 
                 vid_url = entry.get('url')
@@ -96,27 +98,24 @@ def download():
         return jsonify({'error': 'URL missing'}), 400
 
     try:
-        # Tenta obter a URL direta para redirecionar
         ydl_opts = {
             'format': 'bestaudio/best' if fmt == 'mp3' else 'best',
             'quiet': True,
-            'forceurl': True,  # Força obtenção do link direto
+            'forceurl': True,
+            'cache_dir': '/tmp', # Fix for Vercel Read-Only Filesystem
+            'noplaylist': True,
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
-            # Tenta pegar a url direta
             direct_url = info.get('url')
             
             if not direct_url:
-                # Fallback: procurar nos formatos
                 formats = info.get('formats', [])
-                # Ordenar por qualidade se for video, ou bitrate se audio, mas 'best' já deve ter cuidado disso
                 for f in formats:
                     if f.get('url') and f.get('protocol') in ['https', 'http']:
                         direct_url = f.get('url')
-                        # Se achou um bom, para. (A lógica default do ytdl já selecionou 'info' como o melhor, então info['url'] deveria ser o melhor)
                         break
 
             if direct_url:
