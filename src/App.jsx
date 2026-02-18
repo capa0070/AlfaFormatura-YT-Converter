@@ -19,6 +19,9 @@ function App() {
   const [defaultFormat, setDefaultFormat] = useState('mp3');
   const [defaultQuality, setDefaultQuality] = useState('320kbps');
 
+  // URL da API: Usa variável de ambiente em produção ou fallback para localhost
+  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:4001';
+
   // Função para processar a entrada de texto e identificar Links e Playlists
   const handleStartProcess = async () => {
     if (!bulkText.trim()) return;
@@ -46,7 +49,7 @@ function App() {
           }, ...prev]);
 
           // Busca os vídeos da playlist no backend
-          const res = await fetch(`http://localhost:4001/playlist?url=${encodeURIComponent(input)}`);
+          const res = await fetch(`${API_URL}/playlist?url=${encodeURIComponent(input)}`);
           const data = await res.json();
 
           // Remove o placeholder da playlist
@@ -75,7 +78,9 @@ function App() {
 
         } catch (error) {
           console.error('Erro ao processar playlist:', error);
-          // Poderia mostrar erro na UI se quiser
+          // Remove o placeholder da playlist em caso de erro para não travar a UI
+          setItems(prev => prev.filter(i => i.id !== playlistId));
+          alert('Erro ao carregar playlist. Verifique o link ou tente novamente.');
         }
 
       } else {
@@ -105,7 +110,7 @@ function App() {
     try {
       // Faz requisição de info para o backend
       // Se for vídeo de playlist, o fetchInfo pega o tamanho real/resolução aqui
-      const response = await fetch(`http://localhost:4001/info?url=${encodeURIComponent(url)}`);
+      const response = await fetch(`${API_URL}/info?url=${encodeURIComponent(url)}`);
 
       if (!response.ok) throw new Error('Falha ao obter info');
 
@@ -128,7 +133,7 @@ function App() {
   const triggerDownload = (item) => {
     // Quality é passado, removendo 'kbps' se presente para facilitar no backend
     const qualityParam = (item.quality || '192kbps').replace('kbps', '');
-    const downloadUrl = `http://localhost:4001/download?url=${encodeURIComponent(item.url)}&format=${item.format}&quality=${qualityParam}`;
+    const downloadUrl = `${API_URL}/download?url=${encodeURIComponent(item.url)}&format=${item.format}&quality=${qualityParam}`;
 
     // Cria um iframe invisível para forçar o download sem abrir nova aba visível
     const iframe = document.createElement('iframe');

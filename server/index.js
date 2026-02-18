@@ -23,8 +23,9 @@ process.on('unhandledRejection', (reason, p) => {
     console.error('UNHANDLED REJECTION:', reason);
 });
 
-// Caminho do yt-dlp executável (no Windows deve ser .exe)
-const ytDlpPath = path.join(__dirname, 'yt-dlp.exe');
+// Caminho do yt-dlp executável (no Docker usa variável, no Windows usa local)
+// OBS: Em deploy Linux (Render), o yt-dlp deve ser instalado no container.
+const ytDlpPath = process.env.YT_DLP_PATH || path.join(__dirname, 'yt-dlp.exe');
 
 // Função auxiliar para formatar bytes
 const formatBytes = (bytes, decimals = 2) => {
@@ -102,22 +103,54 @@ app.get('/playlist', async (req, res) => {
         const url = req.query.url;
         console.log(`[Playlist] Fetching: ${url}`);
 
-        // Usando ytpl que já estava instalado e funcionando para playlists rápidas
-        // Se precisar mudar para yt-dlp no futuro, pode ser feito.
-        const playlist = await ytpl(url, { limit: Infinity });
+        // Usando yt-dlp para obter informações da playlist (suporta Mixes e é mais robusto)
+        // --flat-playlist: não extrai info detalhada de cada vídeo, apenas lista (muito rápido)
+        // --dump-single-json: retorna tudo em um JSON
+        const args = ['--flat-playlist', '--dump-single-json', '--no-warnings', url];
 
-        const videos = playlist.items.map(item => ({
-            title: item.title,
-            url: item.shortUrl,
-            thumbnail: item.bestThumbnail.url,
-            author: item.author.name
-        }));
+        const child = spawn(ytDlpPath, args);
 
-        console.log(`[Playlist] Found ${videos.length} videos.`);
-        res.json({
-            title: playlist.title,
-            total: videos.length,
-            videos: videos
+        let stdout = '';
+        let stderr = '';
+
+        child.stdout.on('data', (data) => {
+            stdout += data.toString();
+        });
+
+        child.stderr.on('data', (data) => {
+            stderr += data.toString();
+        });
+
+        child.on('close', (code) => {
+            if (code !== 0) {
+                console.error(`yt-dlp playlist error: ${stderr}`);
+                return res.status(500).send(stderr || 'Erro ao obter playlist');
+            }
+
+            try {
+                const playlistData = JSON.parse(stdout);
+                
+                // yt-dlp retorna 'entries' para os itens da playlist
+                const entries = playlistData.entries || [];
+                
+                const videos = entries.map(item => ({
+                    title: item.title,
+                    url: item.url || `https://www.youtube.com/watch?v=${item.id}`,
+                    thumbnail: null, // flat-playlist as vezes não traz thumb, mas ok por enquanto
+                    author: item.uploader || 'Desconhecido'
+                }));
+
+                console.log(`[Playlist] Found ${videos.length} videos.`);
+                res.json({
+                    title: playlistData.title || 'Playlist',
+                    total: videos.length,
+                    videos: videos
+                });
+
+            } catch (e) {
+                console.error('Playlist JSON Parse error:', e);
+                res.status(500).send('Erro ao processar dados da playlist');
+            }
         });
 
     } catch (e) {
