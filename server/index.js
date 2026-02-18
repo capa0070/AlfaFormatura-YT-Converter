@@ -12,6 +12,11 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// Rota de Health Check para verificar se o servidor está online
+app.get('/', (req, res) => {
+    res.send('Servidor YT Converter está ONLINE! 🚀');
+});
+
 // Aumentar o timeout se necessário (embora streaming responda rápido)
 // app.timeout = 300000; 
 
