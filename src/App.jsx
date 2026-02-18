@@ -35,8 +35,10 @@ function App() {
     setBulkText('');
 
     for (const input of inputs) {
-      if (input.includes('list=')) {
-        // É UMA PLAYLIST
+      // Correção: Só trata como playlist se tiver 'list=' E NÃO tiver 'v=' (video id).
+      // Se tiver 'v=' junto com 'list=', é um vídeo tocando dentro de uma playlist -> Baixar apenas o vídeo.
+      if (input.includes('list=') && !input.includes('v=')) {
+        // É UMA PLAYLIST PURA
         try {
           // Cria um placeholder visual para a playlist enquanto carrega
           const playlistId = Math.random().toString(36).substr(2, 9);
