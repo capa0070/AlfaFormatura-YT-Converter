@@ -1,18 +1,24 @@
-const express = require('express');
-const ytdl = require('@distube/ytdl-core');
-const ytpl = require('@distube/ytpl');
+import express from 'express';
 
 const app = express();
 
 app.use(express.json());
 
-// Health Check
+// Rota raiz da API para verificação de status (Health Check)
 app.get('/api', (req, res) => {
-    res.send('API YT Converter on Vercel is OK 🚀');
+    res.status(200).json({ 
+        status: 'online', 
+        message: 'API YT Converter está rodando! 🚀',
+        version: '1.0.1',
+        env: process.env.NODE_ENV
+    });
 });
 
 app.get('/api/info', async (req, res) => {
     try {
+        // Lazy load para evitar crash na inicialização
+        const ytdl = (await import('@distube/ytdl-core')).default;
+
         const url = req.query.url;
         if (!url) return res.status(400).send('URL é obrigatória');
 
@@ -28,17 +34,20 @@ app.get('/api/info', async (req, res) => {
             author: info.videoDetails.author.name,
             thumbnail: info.videoDetails.thumbnails[0].url,
             resolution: format.qualityLabel || 'HD',
-            size: 'N/A' // ytdl-core doesn't always give size easily without content-length check
+            size: 'N/A' 
         });
 
     } catch (e) {
         console.error('Info Error:', e);
-        res.status(500).send(e.message);
+        res.status(500).send(e.message || 'Erro ao obter informações');
     }
 });
 
 app.get('/api/playlist', async (req, res) => {
     try {
+        // Lazy load
+        const ytpl = (await import('@distube/ytpl')).default;
+
         const url = req.query.url;
         if (!url) return res.status(400).send('URL é obrigatória');
 
@@ -59,7 +68,7 @@ app.get('/api/playlist', async (req, res) => {
 
     } catch (e) {
         console.error('Playlist Error:', e);
-        res.status(500).send(e.message);
+        res.status(500).send(e.message || 'Erro ao processar playlist');
     }
 });
 
@@ -68,20 +77,17 @@ app.get('/api/download', async (req, res) => {
     if (!url) return res.status(400).send('URL missing');
 
     try {
+        // Lazy load
+        const ytdl = (await import('@distube/ytdl-core')).default;
+
         const info = await ytdl.getBasicInfo(url);
         const title = info.videoDetails.title.replace(/[^\x20-\x7E]/g, "").replace(/["'\/\\:*?"<>|]/g, "_");
 
         res.header('Content-Disposition', `attachment; filename="${title}.${format || 'mp4'}"`);
 
         if (format === 'mp3') {
-           // Vercel Serverless limits execution time (10s free). 
-           // Real conversion with ffmpeg is NOT viable here.
-           // We will stream the audio-only format directly.
-           // It will likely be m4a or webm, but we label as requested.
-           // Browsers might play it or save it.
            ytdl(url, { filter: 'audioonly', quality: 'highestaudio' }).pipe(res);
         } else {
-            // Video
             ytdl(url, { quality: 'highest' }).pipe(res);
         }
 
@@ -91,4 +97,4 @@ app.get('/api/download', async (req, res) => {
     }
 });
 
-module.exports = app;
+export default app;
