@@ -5,7 +5,7 @@ const path = require('path');
 const fs = require('fs');
 const contentDisposition = require('content-disposition');
 const ffmpegPath = require('ffmpeg-static');
-const ytpl = require('ytpl');
+// const ytpl = require('ytpl'); // Removido pois substituímos por yt-dlp
 
 const app = express();
 
@@ -255,5 +255,5 @@ app.get('/download', async (req, res) => {
     }
 });
 
-const PORT = 4001;
+const PORT = process.env.PORT || 4001;
 app.listen(PORT, () => console.log(`Servidor de Qualidade (yt-dlp) ON : ${PORT}`));
