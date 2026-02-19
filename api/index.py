@@ -18,13 +18,24 @@ def health():
     return "API YT Converter (Python/Flask) is OK 🚀"
 
 def get_ydl_opts():
-    return {
+    opts = {
         'quiet': True,
         'no_warnings': True,
         'cache_dir': '/tmp',
         'nocheckcertificate': True,
         'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
     }
+    
+    # Verifica se temos cookies configurados na variável de ambiente
+    cookies_content = os.environ.get('COOKIES_TXT')
+    if cookies_content:
+        # Cria um arquivo de cookies temporário
+        cookies_path = os.path.join(tempfile.gettempdir(), 'youtube_cookies.txt')
+        with open(cookies_path, 'w', encoding='utf-8') as f:
+            f.write(cookies_content)
+        opts['cookiefile'] = cookies_path
+        
+    return opts
 
 @app.route('/api/info', methods=['GET'])
 def info():
