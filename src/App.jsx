@@ -20,7 +20,8 @@ function App() {
   const [defaultQuality, setDefaultQuality] = useState('320kbps');
 
   // No Vercel, o backend e frontend rodam juntos. Usamos /api para acessar as funções.
-  const API_URL = '/api';
+  // Em produção no Render (separado), usamos a variável de ambiente completa.
+  const API_URL = import.meta.env.VITE_API_URL || '/api';
 
   // Função para processar a entrada de texto e identificar Links e Playlists
   const handleStartProcess = async () => {

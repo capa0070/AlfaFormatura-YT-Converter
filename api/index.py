@@ -127,4 +127,5 @@ def download():
         return jsonify({'error': str(e)}), 500
 
 # Vercel look for 'app'
-# No need for if __name__ == '__main__' since Vercel handled WSGI
+if __name__ == '__main__':
+    app.run(debug=True, port=5000)
