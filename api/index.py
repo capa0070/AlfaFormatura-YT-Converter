@@ -33,8 +33,11 @@ def get_ydl_opts():
         cookies_path = os.path.join(tempfile.gettempdir(), 'youtube_cookies.txt')
         with open(cookies_path, 'w', encoding='utf-8') as f:
             f.write(cookies_content)
-        opts['cookiefile'] = cookies_path
-        
+    # Configura Proxy se disponível (necessário para Geo-Block BR)
+    proxy_url = os.environ.get('HTTP_PROXY')
+    if proxy_url:
+         opts['proxy'] = proxy_url
+         
     return opts
 
 @app.route('/api/info', methods=['GET'])
