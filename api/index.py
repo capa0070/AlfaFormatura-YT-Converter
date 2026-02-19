@@ -1,6 +1,7 @@
-from flask import Flask, request, jsonify, redirect
+from flask import Flask, request, jsonify, redirect, send_file
 import yt_dlp
 import os
+import tempfile
 
 app = Flask(__name__)
 
@@ -16,6 +17,15 @@ def after_request(response):
 def health():
     return "API YT Converter (Python/Flask) is OK 🚀"
 
+def get_ydl_opts():
+    return {
+        'quiet': True,
+        'no_warnings': True,
+        'cache_dir': '/tmp',
+        'nocheckcertificate': True,
+        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+    }
+
 @app.route('/api/info', methods=['GET'])
 def info():
     url = request.args.get('url')
@@ -23,13 +33,10 @@ def info():
         return jsonify({'error': 'URL missing'}), 400
 
     try:
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'skip_download': True,
-            'cache_dir': '/tmp', # Fix for Vercel Read-Only Filesystem
-            'noplaylist': True,
-        }
+        ydl_opts = get_ydl_opts()
+        ydl_opts['skip_download'] = True
+        ydl_opts['noplaylist'] = True
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
@@ -51,13 +58,10 @@ def playlist():
         return jsonify({'error': 'URL missing'}), 400
 
     try:
-        ydl_opts = {
-            'quiet': True,
-            'no_warnings': True,
-            'extract_flat': True,
-            'dump_single_json': True,
-            'cache_dir': '/tmp', # Fix for Vercel Read-Only Filesystem
-        }
+        ydl_opts = get_ydl_opts()
+        ydl_opts['extract_flat'] = True
+        ydl_opts['dump_single_json'] = True
+        
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(url, download=False)
             
@@ -98,34 +102,47 @@ def download():
         return jsonify({'error': 'URL missing'}), 400
 
     try:
-        ydl_opts = {
-            'format': 'bestaudio/best' if fmt == 'mp3' else 'best',
-            'quiet': True,
-            'forceurl': True,
-            'cache_dir': '/tmp', # Fix for Vercel Read-Only Filesystem
-            'noplaylist': True,
-        }
+        # Tenta obter URL direta primeiro (redirect)
+        # Se falhar (por exemplo, 403 do youtube ou necessidade de merge), baixamos no servidor
         
-        with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
+        ydl_opts = get_ydl_opts()
+        ydl_opts['format'] = 'bestaudio/best' if fmt == 'mp3' else 'best'
+        ydl_opts['noplaylist'] = True
+        
+        # Estratégia híbrida: Tenta pegar URL direta primeiro
+        try:
+             with yt_dlp.YoutubeDL({'forceurl': True, **ydl_opts}) as ydl:
+                info = ydl.extract_info(url, download=False)
+                direct_url = info.get('url')
+                if direct_url:
+                    return redirect(direct_url, code=302)
+        except Exception:
+            pass # Falhou redirect, tentar baixar localmente
             
-            direct_url = info.get('url')
+        # Fallback: Download no servidor (Render tem disco temporário)
+        with tempfile.TemporaryDirectory() as tmpdirname:
+            out_tmpl = os.path.join(tmpdirname, '%(title)s.%(ext)s')
+            ydl_opts['outtmpl'] = out_tmpl
             
-            if not direct_url:
-                formats = info.get('formats', [])
-                for f in formats:
-                    if f.get('url') and f.get('protocol') in ['https', 'http']:
-                        direct_url = f.get('url')
-                        break
+            # Se for MP3, precisa converter
+            if fmt == 'mp3':
+                ydl_opts['postprocessors'] = [{
+                    'key': 'FFmpegExtractAudio',
+                    'preferredcodec': 'mp3',
+                    'preferredquality': '192',
+                }]
 
-            if direct_url:
-                return redirect(direct_url, code=302)
-            else:
-                return jsonify({'error': 'Não foi possível extrair o link direto do vídeo.'}), 500
+            with yt_dlp.YoutubeDL(ydl_opts) as ydl:
+                info = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info)
+                
+                if fmt == 'mp3':
+                    filename = os.path.splitext(filename)[0] + '.mp3'
+                
+                return send_file(filename, as_attachment=True)
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
 
-# Vercel look for 'app'
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
