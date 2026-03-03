@@ -164,7 +164,9 @@ def download():
             pass # Falha proxy, tenta baixar pro disco
             
         # Fallback: Download no servidor (Render tem disco temporário)
-        with tempfile.TemporaryDirectory() as tmpdirname:
+        import shutil
+        tmpdirname = tempfile.mkdtemp()
+        try:
             out_tmpl = os.path.join(tmpdirname, '%(title)s.%(ext)s')
             ydl_opts['outtmpl'] = out_tmpl
             
@@ -183,7 +185,34 @@ def download():
                 if fmt == 'mp3':
                     filename = os.path.splitext(filename)[0] + '.mp3'
                 
-                return send_file(filename, as_attachment=True)
+                safe_title = re.sub(r'[^\w\s-]', '_', info.get('title', 'video')).strip()
+                ext_file = 'mp3' if fmt == 'mp3' else 'mp4'
+
+                def generate_and_delete():
+                    try:
+                        with open(filename, 'rb') as f:
+                            while True:
+                                chunk = f.read(1024 * 512)
+                                if not chunk: break
+                                yield chunk
+                    finally:
+                        try:
+                            shutil.rmtree(tmpdirname)
+                        except Exception as e:
+                            print("Erro ao remover tempdir:", e)
+
+                headers = {
+                    'Content-Disposition': f'attachment; filename="{safe_title}.{ext_file}"',
+                    'Content-Type': 'audio/mpeg' if fmt == 'mp3' else 'video/mp4'
+                }
+                
+                return Response(stream_with_context(generate_and_delete()), headers=headers)
+        except Exception as e:
+            try:
+                shutil.rmtree(tmpdirname)
+            except:
+                pass
+            raise e
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
