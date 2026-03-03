@@ -142,8 +142,14 @@ function App() {
     const qualityParam = (item.quality || '192kbps').replace('kbps', '');
     const downloadUrl = `${API_URL}/download?url=${encodeURIComponent(item.url)}&format=${item.format}&quality=${qualityParam}`;
 
-    // Abre em nova aba para o usuário ver se der erro no servidor (500/404)
-    window.open(downloadUrl, '_blank');
+    // Cria um elemento âncora oculto para forçar o download na mesma tela 
+    // em vez de abrir uma nova aba (_blank) que fica com um player vazio
+    const a = document.createElement('a');
+    a.href = downloadUrl;
+    a.download = '';
+    document.body.appendChild(a);
+    a.click();
+    document.body.removeChild(a);
   };
 
   const downloadAll = () => {
