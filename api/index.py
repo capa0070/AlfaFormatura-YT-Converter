@@ -38,19 +38,26 @@ def get_ydl_opts():
     }
 
     # Prioridade 1: Secret File do Render em /etc/secrets/cookies.txt
+    # IMPORTANTE: copiar para /tmp porque /etc/secrets é read-only e yt-dlp precisa escrever
     secret_file_path = '/etc/secrets/cookies.txt'
+    tmp_cookies_path = '/tmp/yt_cookies_working.txt'
+
     if os.path.exists(secret_file_path):
-        print(f"[cookies] Usando Secret File: {secret_file_path}")
-        opts['cookiefile'] = secret_file_path
+        try:
+            import shutil as _shutil
+            _shutil.copy2(secret_file_path, tmp_cookies_path)
+            print(f"[cookies] Secret File copiado para: {tmp_cookies_path}")
+            opts['cookiefile'] = tmp_cookies_path
+        except Exception as e:
+            print(f"[cookies] Erro ao copiar Secret File: {e}")
 
     # Prioridade 2: Variável de ambiente COOKIES_TXT (fallback)
     elif os.environ.get('COOKIES_TXT'):
         cookies_content = os.environ.get('COOKIES_TXT')
-        cookies_path = os.path.join(tempfile.gettempdir(), 'yt_cookies.txt')
-        with open(cookies_path, 'w', encoding='utf-8') as f:
+        with open(tmp_cookies_path, 'w', encoding='utf-8') as f:
             f.write(cookies_content)
-        print(f"[cookies] Usando env COOKIES_TXT salvo em: {cookies_path}")
-        opts['cookiefile'] = cookies_path
+        print(f"[cookies] Usando env COOKIES_TXT salvo em: {tmp_cookies_path}")
+        opts['cookiefile'] = tmp_cookies_path
 
     else:
         print("[cookies] AVISO: Nenhum cookie configurado. YouTube pode bloquear o acesso.")
