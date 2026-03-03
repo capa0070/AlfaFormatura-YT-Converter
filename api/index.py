@@ -22,19 +22,18 @@ def health():
 
 def get_ydl_opts():
     opts = {
-        'quiet': True,
-        'no_warnings': True,
+        'quiet': False,  # Ativa logs para diagnóstico
+        'no_warnings': False,
         'nocheckcertificate': True,
-        # Simula cliente Android para contornar detecção de bot
+        # tv_embedded é o client mais resistente à detecção de bot
         'extractor_args': {
             'youtube': {
-                'player_client': ['android', 'web'],
-                'player_skip': ['webpage'],
+                'player_client': ['tv_embedded', 'ios', 'web'],
             }
         },
         'http_headers': {
-            'User-Agent': 'com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip',
-            'Accept-Language': 'pt-BR,pt;q=0.9',
+            'User-Agent': 'Mozilla/5.0 (ChromiumStylePlatform) Cobalt/Version',
+            'Accept-Language': 'pt-BR,pt;q=0.9,en;q=0.8',
         },
     }
 
