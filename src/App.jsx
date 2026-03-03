@@ -7,7 +7,8 @@ import {
   Loader2,
   Trash2,
   Layers,
-  FileText
+  FileText,
+  RefreshCw
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 import './App.css';
@@ -175,6 +176,11 @@ function App() {
     setItems(prev => prev.filter(item => item.id !== id));
   };
 
+  const retryItem = (item) => {
+    updateItem(item.id, { status: 'processing', info: null, progress: 0 });
+    fetchInfo(item.id, item.url);
+  };
+
   const handleFormatChange = (e) => {
     const newFormat = e.target.value;
     setDefaultFormat(newFormat);
@@ -280,6 +286,11 @@ function App() {
                     {item.status === 'completed' && (
                       <button className="download-btn-mini" onClick={() => triggerDownload(item)}>
                         <Download size={16} /> Baixar
+                      </button>
+                    )}
+                    {item.status === 'error' && (
+                      <button className="retry-btn" onClick={() => retryItem(item)} title="Tentar novamente">
+                        <RefreshCw size={16} /> Tentar
                       </button>
                     )}
                     <button className="delete-btn" onClick={() => removeItem(item.id)}><Trash2 size={16} /></button>
