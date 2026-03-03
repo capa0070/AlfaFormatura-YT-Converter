@@ -38,13 +38,23 @@ def get_ydl_opts():
         },
     }
 
-    # Verifica se temos cookies configurados na variável de ambiente
-    cookies_content = os.environ.get('COOKIES_TXT')
-    if cookies_content:
+    # Prioridade 1: Secret File do Render em /etc/secrets/cookies.txt
+    secret_file_path = '/etc/secrets/cookies.txt'
+    if os.path.exists(secret_file_path):
+        print(f"[cookies] Usando Secret File: {secret_file_path}")
+        opts['cookiefile'] = secret_file_path
+
+    # Prioridade 2: Variável de ambiente COOKIES_TXT (fallback)
+    elif os.environ.get('COOKIES_TXT'):
+        cookies_content = os.environ.get('COOKIES_TXT')
         cookies_path = os.path.join(tempfile.gettempdir(), 'yt_cookies.txt')
         with open(cookies_path, 'w', encoding='utf-8') as f:
             f.write(cookies_content)
+        print(f"[cookies] Usando env COOKIES_TXT salvo em: {cookies_path}")
         opts['cookiefile'] = cookies_path
+
+    else:
+        print("[cookies] AVISO: Nenhum cookie configurado. YouTube pode bloquear o acesso.")
 
     # Configura Proxy se disponível
     proxy_url = os.environ.get('HTTP_PROXY')
