@@ -44,9 +44,11 @@ def get_ydl_opts():
 
     if os.path.exists(secret_file_path):
         try:
-            import shutil as _shutil
-            _shutil.copy2(secret_file_path, tmp_cookies_path)
-            print(f"[cookies] Secret File copiado para: {tmp_cookies_path}")
+            with open(secret_file_path, 'r', encoding='utf-8') as src:
+                cookie_data = src.read()
+            with open(tmp_cookies_path, 'w', encoding='utf-8') as dst:
+                dst.write(cookie_data)
+            print(f"[cookies] Secret File lido e copiado para: {tmp_cookies_path}")
             opts['cookiefile'] = tmp_cookies_path
         except Exception as e:
             print(f"[cookies] Erro ao copiar Secret File: {e}")
