@@ -1,7 +1,10 @@
-from flask import Flask, request, jsonify, redirect, send_file
+from flask import Flask, request, jsonify, Response, stream_with_context
 import yt_dlp
 import os
 import tempfile
+import shutil
+import re
+import urllib.request
 
 app = Flask(__name__)
 
@@ -21,26 +24,37 @@ def get_ydl_opts():
     opts = {
         'quiet': True,
         'no_warnings': True,
-        'cache_dir': '/tmp',
         'nocheckcertificate': True,
-        'user_agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        # Simula cliente Android para contornar detecção de bot
+        'extractor_args': {
+            'youtube': {
+                'player_client': ['android', 'web'],
+                'player_skip': ['webpage'],
+            }
+        },
+        'http_headers': {
+            'User-Agent': 'com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip',
+            'Accept-Language': 'pt-BR,pt;q=0.9',
+        },
     }
-    
+
     # Verifica se temos cookies configurados na variável de ambiente
     cookies_content = os.environ.get('COOKIES_TXT')
     if cookies_content:
-        # Cria um arquivo de cookies temporário
-        cookies_path = os.path.join(tempfile.gettempdir(), 'youtube_cookies.txt')
+        cookies_path = os.path.join(tempfile.gettempdir(), 'yt_cookies.txt')
         with open(cookies_path, 'w', encoding='utf-8') as f:
             f.write(cookies_content)
         opts['cookiefile'] = cookies_path
 
-    # Configura Proxy se disponível (necessário para Geo-Block BR)
+    # Configura Proxy se disponível
     proxy_url = os.environ.get('HTTP_PROXY')
     if proxy_url:
-         opts['proxy'] = proxy_url
-         
+        opts['proxy'] = proxy_url
+
     return opts
+
+def safe_filename(title):
+    return re.sub(r'[^\w\s-]', '_', title or 'video').strip()[:100]
 
 @app.route('/api/info', methods=['GET'])
 def info():
@@ -52,16 +66,16 @@ def info():
         ydl_opts = get_ydl_opts()
         ydl_opts['skip_download'] = True
         ydl_opts['noplaylist'] = True
-        
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            
+            info_data = ydl.extract_info(url, download=False)
+
             res = {
-                'title': info.get('title', 'Video'),
-                'author': info.get('uploader', 'Unknown'),
-                'thumbnail': info.get('thumbnail', ''),
-                'resolution': f"{info.get('width')}x{info.get('height')}" if info.get('width') else 'HD',
-                'size': 'N/A' 
+                'title': info_data.get('title', 'Video'),
+                'author': info_data.get('uploader', 'Unknown'),
+                'thumbnail': info_data.get('thumbnail', ''),
+                'resolution': f"{info_data.get('width')}x{info_data.get('height')}" if info_data.get('width') else 'HD',
+                'size': 'N/A'
             }
             return jsonify(res)
     except Exception as e:
@@ -76,21 +90,20 @@ def playlist():
     try:
         ydl_opts = get_ydl_opts()
         ydl_opts['extract_flat'] = True
-        ydl_opts['dump_single_json'] = True
-        
+
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-            info = ydl.extract_info(url, download=False)
-            
-            entries = info.get('entries', [])
+            info_data = ydl.extract_info(url, download=False)
+
+            entries = info_data.get('entries', [])
             videos = []
             for entry in entries:
-                if not entry: continue
-                
+                if not entry:
+                    continue
                 vid_url = entry.get('url')
                 if not vid_url:
-                     vid_id = entry.get('id')
-                     if vid_id: vid_url = f"https://www.youtube.com/watch?v={vid_id}"
-                
+                    vid_id = entry.get('id')
+                    if vid_id:
+                        vid_url = f"https://www.youtube.com/watch?v={vid_id}"
                 if vid_url:
                     videos.append({
                         'title': entry.get('title', 'Video'),
@@ -99,12 +112,11 @@ def playlist():
                         'author': entry.get('uploader', 'Unknown')
                     })
 
-            res = {
-                'title': info.get('title', 'Playlist'),
+            return jsonify({
+                'title': info_data.get('title', 'Playlist'),
                 'total': len(videos),
                 'videos': videos
-            }
-            return jsonify(res)
+            })
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
@@ -113,64 +125,80 @@ def playlist():
 def download():
     url = request.args.get('url')
     fmt = request.args.get('format', 'mp4')
-    
+
     if not url:
         return jsonify({'error': 'URL missing'}), 400
 
     try:
-        from flask import Response, stream_with_context
-        import urllib.request
-        import re
-
-        # Filtros: garante um arquivo unificado em MP4, ou melhor audio se for MP3/M4A
-        # Isso evita links de manifestos HLS (m3u8) que o browser abre como player vazio
         ydl_opts = get_ydl_opts()
-        ydl_opts['format'] = 'bestaudio[ext=m4a]/bestaudio/best' if fmt == 'mp3' else 'best[ext=mp4]/best'
         ydl_opts['noplaylist'] = True
-        
-        # Estratégia de Proxy Stream: repassa dados via servidor forçando "attachment"
+
+        if fmt == 'mp3':
+            # Melhor áudio disponível
+            ydl_opts['format'] = 'bestaudio[ext=m4a]/bestaudio[ext=webm]/bestaudio/best'
+        else:
+            # Melhor vídeo MP4 com áudio embutido (evita muxing no servidor)
+            ydl_opts['format'] = (
+                'bestvideo[ext=mp4][vcodec^=avc1]+bestaudio[ext=m4a]/'
+                'best[ext=mp4]/best'
+            )
+            ydl_opts['merge_output_format'] = 'mp4'
+
+        # ── Tentativa 1: Stream direto (sem salvar disco) ────────────────────
         try:
-             with yt_dlp.YoutubeDL({'forceurl': True, **ydl_opts}) as ydl:
-                info = ydl.extract_info(url, download=False)
-                direct_url = info.get('url')
-                protocol = info.get('protocol', '')
-                
-                # Só processa se não for um manifesto de streaming (playlist_vid)
-                if direct_url and 'm3u8' not in protocol and 'manifest' not in direct_url:
-                    # Formata o titulo do arquivo pra um nome seguro
-                    safe_title = re.sub(r'[^\w\s-]', '_', info.get('title', 'video')).strip()
-                    ext = info.get('ext', 'mp4') if fmt == 'mp4' else 'm4a'
-                    
-                    req = urllib.request.Request(direct_url, headers={'User-Agent': 'Mozilla/5.0'})
-                    resp = urllib.request.urlopen(req)
-                    
-                    # Cria cabeçalhos que dizem explicitamente: "ISTO DEVE SER BAIXADO!"
-                    headers = {
-                        'Content-Disposition': f'attachment; filename="{safe_title}.{ext}"',
-                        'Content-Type': resp.headers.get('Content-Type', 'application/octet-stream')
-                    }
-                    if resp.headers.get('Content-Length'):
-                        headers['Content-Length'] = resp.headers.get('Content-Length')
-                        
-                    def generate():
-                        while True:
-                            chunk = resp.read(1024 * 512)
-                            if not chunk: break
-                            yield chunk
-                            
-                    return Response(stream_with_context(generate()), headers=headers)
+            probe_opts = {**ydl_opts}
+            with yt_dlp.YoutubeDL(probe_opts) as ydl:
+                info_data = ydl.extract_info(url, download=False)
+
+            # Para formatos mesclados o yt-dlp retorna lista de 'requested_formats'
+            direct_url = None
+            protocol = ''
+
+            req_formats = info_data.get('requested_formats')
+            if req_formats:
+                # Há mescla de streams → não tem URL única; vai pro fallback no disco
+                raise ValueError("Formato requer mescla de streams, usando fallback no disco")
+
+            direct_url = info_data.get('url')
+            protocol = info_data.get('protocol', '')
+
+            if not direct_url or 'm3u8' in protocol or 'manifest' in (direct_url or ''):
+                raise ValueError("URL direta é manifesto HLS/DASH, usando fallback no disco")
+
+            title = safe_filename(info_data.get('title', 'video'))
+            ext = info_data.get('ext', 'mp4') if fmt == 'mp4' else 'm4a'
+
+            req = urllib.request.Request(
+                direct_url,
+                headers={'User-Agent': 'com.google.android.youtube/17.36.4 (Linux; U; Android 12; GB) gzip'}
+            )
+            resp = urllib.request.urlopen(req, timeout=30)
+
+            resp_headers = {
+                'Content-Disposition': f'attachment; filename="{title}.{ext}"',
+                'Content-Type': resp.headers.get('Content-Type', 'application/octet-stream'),
+            }
+            if resp.headers.get('Content-Length'):
+                resp_headers['Content-Length'] = resp.headers.get('Content-Length')
+
+            def gen_proxy():
+                while True:
+                    chunk = resp.read(512 * 1024)
+                    if not chunk:
+                        break
+                    yield chunk
+
+            return Response(stream_with_context(gen_proxy()), headers=resp_headers)
+
         except Exception as e:
-            print("Proxy stream falhou, tentando fallback local:", str(e))
-            pass # Falha proxy, tenta baixar pro disco
-            
-        # Fallback: Download no servidor (Render tem disco temporário)
-        import shutil
+            print(f"[Stream direto] falhou: {e} — tentando download no disco...")
+
+        # ── Tentativa 2: Fallback – download no disco do servidor ─────────────
         tmpdirname = tempfile.mkdtemp()
         try:
             out_tmpl = os.path.join(tmpdirname, '%(title)s.%(ext)s')
             ydl_opts['outtmpl'] = out_tmpl
-            
-            # Se for MP3, precisa converter
+
             if fmt == 'mp3':
                 ydl_opts['postprocessors'] = [{
                     'key': 'FFmpegExtractAudio',
@@ -179,43 +207,58 @@ def download():
                 }]
 
             with yt_dlp.YoutubeDL(ydl_opts) as ydl:
-                info = ydl.extract_info(url, download=True)
-                filename = ydl.prepare_filename(info)
-                
+                info_data = ydl.extract_info(url, download=True)
+                filename = ydl.prepare_filename(info_data)
+
                 if fmt == 'mp3':
                     filename = os.path.splitext(filename)[0] + '.mp3'
-                
-                safe_title = re.sub(r'[^\w\s-]', '_', info.get('title', 'video')).strip()
-                ext_file = 'mp3' if fmt == 'mp3' else 'mp4'
+                elif not filename.endswith('.mp4'):
+                    # Se o muxing gerou outro nome, procura o mp4 na pasta
+                    for f in os.listdir(tmpdirname):
+                        if f.endswith('.mp4'):
+                            filename = os.path.join(tmpdirname, f)
+                            break
 
-                def generate_and_delete():
+            if not os.path.exists(filename) or os.path.getsize(filename) == 0:
+                shutil.rmtree(tmpdirname)
+                return jsonify({'error': 'Arquivo de mídia vazio ou não encontrado. Tente outro vídeo.'}), 500
+
+            title = safe_filename(info_data.get('title', 'video'))
+            ext_file = 'mp3' if fmt == 'mp3' else 'mp4'
+            file_size = os.path.getsize(filename)
+
+            def gen_disk():
+                try:
+                    with open(filename, 'rb') as f:
+                        while True:
+                            chunk = f.read(512 * 1024)
+                            if not chunk:
+                                break
+                            yield chunk
+                finally:
                     try:
-                        with open(filename, 'rb') as f:
-                            while True:
-                                chunk = f.read(1024 * 512)
-                                if not chunk: break
-                                yield chunk
-                    finally:
-                        try:
-                            shutil.rmtree(tmpdirname)
-                        except Exception as e:
-                            print("Erro ao remover tempdir:", e)
+                        shutil.rmtree(tmpdirname)
+                    except Exception as err:
+                        print(f"Erro ao limpar tempdir: {err}")
 
-                headers = {
-                    'Content-Disposition': f'attachment; filename="{safe_title}.{ext_file}"',
-                    'Content-Type': 'audio/mpeg' if fmt == 'mp3' else 'video/mp4'
-                }
-                
-                return Response(stream_with_context(generate_and_delete()), headers=headers)
+            disk_headers = {
+                'Content-Disposition': f'attachment; filename="{title}.{ext_file}"',
+                'Content-Type': 'audio/mpeg' if fmt == 'mp3' else 'video/mp4',
+                'Content-Length': str(file_size),
+            }
+
+            return Response(stream_with_context(gen_disk()), headers=disk_headers)
+
         except Exception as e:
             try:
                 shutil.rmtree(tmpdirname)
-            except:
+            except Exception:
                 pass
             raise e
 
     except Exception as e:
         return jsonify({'error': str(e)}), 500
+
 
 if __name__ == '__main__':
     app.run(debug=True, port=5000)
