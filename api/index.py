@@ -118,22 +118,50 @@ def download():
         return jsonify({'error': 'URL missing'}), 400
 
     try:
-        # Tenta obter URL direta primeiro (redirect)
-        # Se falhar (por exemplo, 403 do youtube ou necessidade de merge), baixamos no servidor
-        
+        from flask import Response, stream_with_context
+        import urllib.request
+        import re
+
+        # Filtros: garante um arquivo unificado em MP4, ou melhor audio se for MP3/M4A
+        # Isso evita links de manifestos HLS (m3u8) que o browser abre como player vazio
         ydl_opts = get_ydl_opts()
-        ydl_opts['format'] = 'bestaudio/best' if fmt == 'mp3' else 'best'
+        ydl_opts['format'] = 'bestaudio[ext=m4a]/bestaudio/best' if fmt == 'mp3' else 'best[ext=mp4]/best'
         ydl_opts['noplaylist'] = True
         
-        # Estratégia híbrida: Tenta pegar URL direta primeiro
+        # Estratégia de Proxy Stream: repassa dados via servidor forçando "attachment"
         try:
              with yt_dlp.YoutubeDL({'forceurl': True, **ydl_opts}) as ydl:
                 info = ydl.extract_info(url, download=False)
                 direct_url = info.get('url')
-                if direct_url:
-                    return redirect(direct_url, code=302)
-        except Exception:
-            pass # Falhou redirect, tentar baixar localmente
+                protocol = info.get('protocol', '')
+                
+                # Só processa se não for um manifesto de streaming (playlist_vid)
+                if direct_url and 'm3u8' not in protocol and 'manifest' not in direct_url:
+                    # Formata o titulo do arquivo pra um nome seguro
+                    safe_title = re.sub(r'[^\w\s-]', '_', info.get('title', 'video')).strip()
+                    ext = info.get('ext', 'mp4') if fmt == 'mp4' else 'm4a'
+                    
+                    req = urllib.request.Request(direct_url, headers={'User-Agent': 'Mozilla/5.0'})
+                    resp = urllib.request.urlopen(req)
+                    
+                    # Cria cabeçalhos que dizem explicitamente: "ISTO DEVE SER BAIXADO!"
+                    headers = {
+                        'Content-Disposition': f'attachment; filename="{safe_title}.{ext}"',
+                        'Content-Type': resp.headers.get('Content-Type', 'application/octet-stream')
+                    }
+                    if resp.headers.get('Content-Length'):
+                        headers['Content-Length'] = resp.headers.get('Content-Length')
+                        
+                    def generate():
+                        while True:
+                            chunk = resp.read(1024 * 512)
+                            if not chunk: break
+                            yield chunk
+                            
+                    return Response(stream_with_context(generate()), headers=headers)
+        except Exception as e:
+            print("Proxy stream falhou, tentando fallback local:", str(e))
+            pass # Falha proxy, tenta baixar pro disco
             
         # Fallback: Download no servidor (Render tem disco temporário)
         with tempfile.TemporaryDirectory() as tmpdirname:
